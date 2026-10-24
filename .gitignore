@@ -18,3 +18,6 @@ logs/_*.txt
 .vscode/
 Thumbs.db
 desktop.ini
+
+# Local-only launchers with hardcoded absolute paths (never push to public repo)
+run_watchdog.cmd

@@ -182,13 +182,17 @@ def pick_pythonw() -> str:
 
 
 def install_startup() -> Path:
-    """往 Startup 目录放一个隐藏窗口的 .vbs（双击/开机都会静默拉起托盘程序）。
+    """往 Startup 目录放一个隐藏窗口的 .vbs（双击/开机都会静默拉起守护进程）。
+
+    自启入口是 **watchdog**（sticky_watchdog.py）而不是 app：守护负责拉起
+    并盯住托盘实例，开机 / app 被杀都由这一条链复活。
+    watchdog 检测到 app 已在跑就不会重复拉，和手动 run_sticky.cmd 兼容。
 
     .vbs 里**不写中文**：WSH 按 ANSI/GBK 读文件，中文注释会变乱码
     （.cmd 同理，实测踩过）。
     """
     vbs = startup_dir() / STARTUP_VBS
-    cmd = f'"{pick_pythonw()}" "{(ROOT / "tools" / "sticky_app.py").as_posix()}"'
+    cmd = f'"{pick_pythonw()}" "{(ROOT / "tools" / "sticky_watchdog.py").as_posix()}"'
     body = ("' cb_sticky autostart (hidden window, tray icon only)\n"
             'CreateObject("Wscript.Shell").Run "' + cmd.replace('"', '""')
             + '", 0, False\n')
@@ -265,7 +269,8 @@ def main(argv: list[str] | None = None) -> int:
     if changed and not args.remove:
         print(f"\nhook 命令: {command}")
         print("cb / cc 的 hooks 都是热加载，通常即时生效；没生效就重开一个终端跑。")
-        print("别忘了让托盘程序活着：run_sticky.cmd 或 --install-startup。")
+        print("别忘了让守护活着：run_sticky.cmd 起托盘，watchdog 保它不死；")
+        print("开机自启（--install-startup）现在走 watchdog 入口。")
     return 0
 
 

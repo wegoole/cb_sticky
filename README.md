@@ -29,6 +29,7 @@ cb Stop hook ─┐
               ├→ tools/sticky_hook.py → logs/spool/*.json → sticky_app.py（300ms 捞一次）
 cb Notification hook（permission）┘
 cc / ccc（~/.claude/settings.json）与 ccb / cb（codebuddy 配置根）的 hook 同上
+sticky_watchdog.py（5s 轮询）→ 盯住 sticky_app.py，被杀/崩溃自动拉起；开机自启入口
 ```
 
 - **hook 端只干一件事**：判事件类型 → 原子落盘（`.tmp` + `os.replace`）。
@@ -41,6 +42,11 @@ cc / ccc（~/.claude/settings.json）与 ccb / cb（codebuddy 配置根）的 ho
   Windows Terminal / conhost / IDE 终端）；失败只改提示文字，卡片还在。WT 场景的解析见下节。
 - **崩溃防护**：所有 Qt 槽函数自己兜异常——PyQt6 槽里没接住的异常会
   `qFatal → abort()` 无声闪退。
+- **守护进程**：`tools/sticky_watchdog.py` 常驻（pythonw，只依赖标准库 + psutil），
+  每 5s 查一次 app 进程（name + 脚本路径精确匹配，不会误判自己的诊断进程），
+  不在就 `DETACHED_PROCESS` 重新拉起；60s 内拉起超过 5 次会退避 60s，防「起了
+  就崩」疯狂拉。单实例（`logs/watchdog.pid`），动作全落 `logs/watchdog.log`。
+  **开机自启（`--install-startup`）走守护入口**，不再直启 app。
 
 ## 安装 / 使用
 
@@ -50,9 +56,9 @@ cc / ccc（~/.claude/settings.json）与 ccb / cb（codebuddy 配置根）的 ho
 py -3 tools/install_hooks.py --dry-run   # 先看会写什么
 py -3 tools/install_hooks.py
 
-# 2. 让托盘程序活着（二选一）
-./run_sticky.cmd                                  # 手动起
-py -3 tools/install_hooks.py --install-startup    # 开机自启
+# 2. 让托盘程序活着（二选一；推荐守护入口）
+py -3 tools/install_hooks.py --install-startup    # 开机自启（vbs → watchdog → app）
+./run_sticky.cmd                                  # 手动起 app（守护已在跑时无需再起）
 
 # 卸载
 py -3 tools/install_hooks.py --remove
@@ -123,6 +129,7 @@ ccb 的会话 jsonl 有时有 `ai-title`（异步生成，不保证）。
 |---|---|
 | `tools/sticky_hook.py` | hook 入口（纯标准库）：Stop→done（失败回合→err，错误码取 `last_assistant_message` 的 4xx/5xx 前缀）、Notification(permission)→auth，原子写 spool；落盘时抓 `hwnd`（hook 瞬间链还活着；WT 场景抑制为 0） |
 | `tools/sticky_app.py` | 托盘 + 右上角常驻卡片主程序（PyQt6）；三种卡片风格 done / auth / err；点击跳转优先用事件里的 hwnd |
+| `tools/sticky_watchdog.py` | 守护进程（pythonw 常驻，标准库 + psutil）：5s 轮询，app 被杀/崩溃自动拉起（`DETACHED_PROCESS` 脱离自己进程组）；60s 内 >5 次重启退避 60s；单实例 pid 文件 |
 | `tools/_dump_hook.py` | 调试用：把 CLI 发来的 hook 载荷原样落 `logs/_hook_payloads.log`（抓真实事件体） |
 | `tools/_probe_ui.py` | UI 自检探针：绕过 hook 直接喂事件，打印卡片可见性 / 几何形状（排查「卡片不弹」用） |
 | `tools/install_hooks.py` | 装/卸两条 hook（**三处 settings：cb-cli / cb-home / cc-home**，自动备份，幂等）+ 开机自启 |
@@ -135,6 +142,7 @@ ccb 的会话 jsonl 有时有 `ai-title`（异步生成，不保证）。
 | `run_sticky.cmd` | 手动启动（pythonw，无控制台窗口；**文件保持 ASCII**，cmd.exe 按 GBK 读 .cmd，中文注释会变乱码） |
 | `logs/spool/` | 事件中转（运行时生成；app 停止期间可整个删掉重置） |
 | `logs/crash.log` | 启动失败的栈 + 被吞异常的留痕（排查「卡片不弹」先看这里；平时为空） |
+| `logs/watchdog.log` | 守护动作流水（启动 / 拉起 / 退避；排查「弹窗又没了」先看这里） |
 
 以 `_` 开头的 `tools/_*.py` / `_*.ps1` 都是开发调试与回归工具，运行时不被依赖。
 
@@ -154,6 +162,9 @@ ccb 的会话 jsonl 有时有 `ai-title`（异步生成，不保证）。
   **ccb / ccc 弹窗**（真顶层窗口）走 hwnd 精确制导，不受此限；
   **cc 交互多开**（标题都是 `Claude Code (pwsh7)`，且 `/rename` 后标题变会话名、
   枚举认不出）是唯一降级场景：单窗直接跳、多窗轮换。
+- **用户态进程防不住强杀本身**：watchdog 的价值是 app 被杀后 ~5s 自动复活；
+  watchdog 自己同样可被结束（开机自启只保下次开机）。要挡「任务管理器强杀」
+  得升级服务级（NSSM/WinSW），暂不做。
 - **备用触发通道（未实现）**：会话 jsonl（`~/.codebuddy-cli/projects/**/*.jsonl`）
   现已用于「读 aiTitle 找窗口」；万一哪天 hook 整体失效，还可以升级成 watcher
   模式。当前 hook 都是用户级实测可用的事件类型，不需要。
@@ -201,6 +212,7 @@ cb Stop hook ─┐
               ├→ tools/sticky_hook.py → logs/spool/*.json → sticky_app.py (polls every 300ms)
 cb Notification hook (permission)┘
 cc / ccc (~/.claude/settings.json) and ccb / cb (codebuddy config root) use the same hooks
+sticky_watchdog.py (5s poll) → watches sticky_app.py, respawns it if killed; the autostart entry
 ```
 
 - **The hook does exactly one thing**: classify the event → atomic write
@@ -219,6 +231,14 @@ cc / ccc (~/.claude/settings.json) and ccb / cb (codebuddy config root) use the 
   terminals). On failure only the hint text changes — the card stays.
 - **Crash armor**: every Qt slot catches its own exceptions — an uncaught
   exception inside a PyQt6 slot means `qFatal → abort()` with a silent exit.
+- **Watchdog**: `tools/sticky_watchdog.py` stays resident (pythonw; stdlib +
+  psutil only) and polls every 5s for the app process (exact name +
+  script-path match, so it can't be fooled by your own diagnostic processes),
+  respawning it with `DETACHED_PROCESS` when it's gone; more than 5 respawns
+  within 60s triggers a 60s backoff to prevent a crash-loop. Single instance
+  (`logs/watchdog.pid`), everything logged to `logs/watchdog.log`.
+  **Autostart (`--install-startup`) goes through the watchdog**, not the app
+  directly.
 
 ## Install & use
 
@@ -228,9 +248,9 @@ cc / ccc (~/.claude/settings.json) and ccb / cb (codebuddy config root) use the 
 py -3 tools/install_hooks.py --dry-run   # preview what would be written
 py -3 tools/install_hooks.py
 
-# 2. Keep the tray app alive (pick one)
-./run_sticky.cmd                                  # manual start
-py -3 tools/install_hooks.py --install-startup    # autostart
+# 2. Keep the tray app alive (pick one; the watchdog route is recommended)
+py -3 tools/install_hooks.py --install-startup    # autostart (vbs -> watchdog -> app)
+./run_sticky.cmd                                  # manual app start (not needed if the watchdog already runs)
 
 # Uninstall
 py -3 tools/install_hooks.py --remove
@@ -314,6 +334,7 @@ headless CLI with a bad model name / bad key to trigger a failed turn.
 |---|---|
 | `tools/sticky_hook.py` | hook entry (pure stdlib): Stop→done (failed turn→err, code taken from the 4xx/5xx prefix of `last_assistant_message`), Notification(permission)→auth, atomic spool write; captures `hwnd` at write time (chain still alive at hook time; suppressed to 0 for WT) |
 | `tools/sticky_app.py` | tray + top-right persistent card main program (PyQt6); done / auth / err styles; click-to-focus prefers the event's hwnd |
+| `tools/sticky_watchdog.py` | watchdog (resident pythonw; stdlib + psutil): 5s poll, auto-respawns the app when killed/crashed (`DETACHED_PROCESS` escapes its own process group); >5 respawns within 60s → 60s backoff; single-instance pid file |
 | `tools/_dump_hook.py` | debug: dumps the CLI's hook payload verbatim to `logs/_hook_payloads.log` |
 | `tools/_probe_ui.py` | UI self-check probe: feeds events bypassing the hook, prints card visibility / geometry (for "card doesn't show up") |
 | `tools/install_hooks.py` | install/remove the two hooks (**three settings targets: cb-cli / cb-home / cc-home**, auto-backup, idempotent) + autostart |
@@ -326,6 +347,7 @@ headless CLI with a bad model name / bad key to trigger a failed turn.
 | `run_sticky.cmd` | manual launcher (pythonw, no console window; **keep the file ASCII-only** — cmd.exe reads .cmd as GBK, non-ASCII comments get mangled) |
 | `logs/spool/` | event buffer (runtime-generated; safe to delete wholesale while the app is stopped) |
 | `logs/crash.log` | startup failure stacks + swallowed-exception traces (check here first for "no cards"; normally empty) |
+| `logs/watchdog.log` | watchdog action log (start / respawn / backoff; check here first for "the popups vanished again") |
 
 All `tools/_*.py` / `_*.ps1` files are development/debug/regression tools; the
 runtime does not depend on them.
@@ -351,6 +373,11 @@ the two accent colors (done=green `#3ecf8e`, auth=amber `#f5a623`).
   cc windows** (all titled `Claude Code (pwsh7)`, and after `/rename` the title
   becomes the session name which enumeration can't recognize) are the only
   degraded case: single window jumps directly, multiple windows rotate.
+- **User-mode processes can't prevent a force-kill itself**: the watchdog's
+  value is respawning the app ~5s after it's killed; the watchdog itself is
+  equally killable (autostart only guarantees it's back next boot). Blocking
+  Task-Manager force-kills would require a service-level setup (NSSM/WinSW),
+  deliberately not done.
 - **Backup trigger channel (not implemented)**: session jsonl files
   (`~/.codebuddy-cli/projects/**/*.jsonl`) are already used for "read aiTitle to
   find the window"; if hooks ever break entirely this could be upgraded to a

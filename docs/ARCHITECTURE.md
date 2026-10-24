@@ -71,6 +71,11 @@ hook 是**同步**执行的，CLI 会等它跑完，所以 hook 端必须几十�
 - PyQt6：`QSystemTrayIcon` 常驻托盘 + 无边框常驻卡片栈，三种风格全部 `paintEvent`
   自绘（渐变 / 斜纹 tile / accent 条）；
 - 单实例守卫 `QSharedMemory`，开机自启和手动双击不会开出两个；
+- **守护进程 `tools/sticky_watchdog.py`**（纯标准库 + psutil，pythonw 常驻）：
+  5s 轮询查 app 进程（name + 脚本路径精确匹配），不在就 `DETACHED_PROCESS`
+  拉起；60s 内 >5 次重启退避 60s 防崩溃循环；单实例（`logs/watchdog.pid`）。
+  开机自启 vbs 走守护入口（watchdog → app）。用户态进程挡不住强杀本身，
+  守护的价值是 **~5s 自动复活**；
 - **所有 Qt 槽函数自己兜异常**——PyQt6 槽里没接住的异常会 `qFatal → abort()` 无声闪退。
 
 ## 五、依赖分层
