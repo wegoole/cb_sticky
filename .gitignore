@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Runtime artifacts (event buffer / crash traces / debug dumps)
+logs/spool/
+logs/crash.log
+logs/_hook_payloads.log
+logs/_*.json
+logs/_*.png
+logs/_*.txt
+
+# Editor / OS
+.idea/
+.vscode/
+Thumbs.db
+desktop.ini
